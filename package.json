@@ -4,10 +4,11 @@
   "description": "Realtime collaborative editing with ProseMirror and WebSockets",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "type": "module",
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "ts-node scripts/start-server.ts"
+    "start": "tsx scripts/start-server.ts"
   },
   "keywords": [
     "collaborative",
@@ -24,8 +25,8 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "typescript": "^5.9.2",
     "@types/ws": "^8.18.1",
-    "ts-node": "^10.9.2"
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
   }
 }
