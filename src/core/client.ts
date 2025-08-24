@@ -37,6 +37,7 @@ export class RealtimeClient {
   private reconnectTimer?: any;
   private shouldReconnect = true;
   private docVersion = 0;
+  private pendingLocalSteps: { version: number; steps: any[] }[] = [];
 
   constructor(options: RealtimeClientOptions) {
     this.options = options;
@@ -104,13 +105,19 @@ export class RealtimeClient {
 
   // Broadcast steps to the room - steps should be PM Step JSON via codec.serialize
   sendSteps(msg: Omit<StepsMessage, "type" | "roomId" | "clientId">): void {
-    this.send({
+    const payload = {
       type: "steps",
       roomId: this.roomId,
       clientId: this.clientId,
       version: this.docVersion,
       ...msg,
+    } as const;
+    // queue a copy for potential rebase if server requests snapshot
+    this.pendingLocalSteps.push({
+      version: this.docVersion,
+      steps: (msg as any).steps ?? [],
     });
+    this.send(payload as any);
   }
 
   // Broadcast presence updates such as cursor position
@@ -153,10 +160,48 @@ export class RealtimeClient {
       case "presence":
         this.options.onPresence?.(parsed);
         break;
-      case "ack":
-      case "join":
-      case "leave":
+      case "presence-snapshot":
+        for (const entry of (parsed as any).presences ?? []) {
+          this.options.onPresence?.({
+            type: "presence",
+            roomId: (parsed as any).roomId,
+            clientId: entry.clientId,
+            presence: entry.presence,
+          });
+        }
+        break;
+      case "doc-snapshot":
+        this.docVersion = parsed.version;
+        this.options.onDocSnapshot?.(parsed);
+        // After replacing doc, we could attempt to rebase queued local steps using Mapping
+        // For now, clear the queue to avoid duplications until rebase is implemented
+        this.pendingLocalSteps = [];
+        break;
+      case "ping":
+        this.options.onPing?.(parsed.ts);
+        // auto reply pong
+        this.send({
+          type: "pong",
+          roomId: parsed.roomId,
+          clientId: this.clientId,
+          ts: parsed.ts,
+        } as any);
+        break;
       case "error":
+        this.options.onError?.(parsed as any);
+        break;
+      case "ack":
+        this.options.onAck?.(parsed as any);
+        if ((parsed as any).ackType === "steps") {
+          this.pendingLocalSteps.shift();
+        }
+        break;
+      case "join":
+        this.options.onJoin?.(parsed as any);
+        break;
+      case "leave":
+        this.options.onLeave?.(parsed as any);
+        break;
       default:
         break;
     }

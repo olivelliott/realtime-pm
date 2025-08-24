@@ -50,6 +50,7 @@ export interface StepsMessage extends BaseMessage {
   version?: number; // optional doc version for conflict detection
   steps: PM_StepJSON[];
   clientSelection?: CursorRange; // optional selection snapshot
+  doc?: JsonObject; // optional full document snapshot for server authoritative state
 }
 
 export interface PresenceMessage extends BaseMessage {
@@ -85,16 +86,42 @@ export interface ErrorMessage extends BaseMessage {
   reason: string;
 }
 
+// Document snapshot exchange
+export interface DocSnapshotMessage extends BaseMessage {
+  type: "doc-snapshot";
+  version: number;
+  doc: JsonObject; // ProseMirror Node JSON
+}
+
+export interface DocRequestMessage extends BaseMessage {
+  type: "doc-request";
+}
+
+// Heartbeat ping/pong
+export interface PingMessage extends BaseMessage {
+  type: "ping";
+  ts: number;
+}
+
+export interface PongMessage extends BaseMessage {
+  type: "pong";
+  ts: number;
+}
+
 export type ClientToServerMessage =
   | StepsMessage
   | PresenceMessage
   | JoinMessage
-  | LeaveMessage;
+  | LeaveMessage
+  | DocRequestMessage
+  | PongMessage;
 
 export type ServerToClientMessage =
   | StepsMessage
   | PresenceMessage
   | PresenceSnapshotMessage
+  | DocSnapshotMessage
+  | PingMessage
   | AckMessage
   | ErrorMessage
   | JoinMessage
@@ -121,6 +148,12 @@ export interface RealtimeClientOptions {
   onSteps?: (msg: StepsMessage) => void;
   onPresence?: (msg: PresenceMessage) => void;
   onConnectionChange?: (isConnected: boolean) => void;
+  onDocSnapshot?: (msg: DocSnapshotMessage) => void;
+  onError?: (msg: ErrorMessage) => void;
+  onPing?: (ts: number) => void;
+  onAck?: (msg: AckMessage) => void;
+  onJoin?: (msg: JoinMessage) => void;
+  onLeave?: (msg: LeaveMessage) => void;
 
   // Optional: provide a token to authenticate, returned as string
   getAuthToken?: () => Promise<string> | string;

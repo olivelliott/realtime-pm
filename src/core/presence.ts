@@ -32,4 +32,17 @@ export class PresenceStore {
   entries(): Array<{ clientId: ClientId; presence: UserPresence }> {
     return Array.from(this.clientIdToPresence.entries()).map(([clientId, presence]) => ({ clientId, presence }));
   }
+
+  pruneOlderThan(cutoffMs: number): ClientId[] {
+    const removed: ClientId[] = [];
+    const now = Date.now();
+    for (const [clientId, presence] of this.clientIdToPresence.entries()) {
+      const ts = presence.timestamp ?? 0;
+      if (now - ts > cutoffMs) {
+        this.clientIdToPresence.delete(clientId);
+        removed.push(clientId);
+      }
+    }
+    return removed;
+  }
 }

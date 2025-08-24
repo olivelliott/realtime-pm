@@ -3,7 +3,20 @@
   "version": "0.0.1",
   "description": "Realtime collaborative editing with ProseMirror and WebSockets",
   "main": "dist/index.js",
+  "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./tiptap": {
+      "types": "./dist/tiptap/RealtimeExtension.d.ts",
+      "import": "./dist/tiptap/RealtimeExtension.mjs",
+      "require": "./dist/tiptap/RealtimeExtension.js"
+    }
+  },
   "type": "module",
   "scripts": {
     "build": "tsc",

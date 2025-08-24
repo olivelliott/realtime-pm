@@ -16,6 +16,7 @@ export interface RealtimeExtensionOptions
   extends Omit<RealtimeClientOptions, "schema" | "codec"> {
   // Provide your own codec if you manage PM steps explicitly
   // By default we pass a no-op JSON codec and the editor schema
+  onPresenceUpdate?: (list: Array<{ clientId: string; presence: any }>) => void;
 }
 
 export const RealtimeExtension = Extension.create<RealtimeExtensionOptions>({
@@ -39,6 +40,14 @@ export const RealtimeExtension = Extension.create<RealtimeExtensionOptions>({
     const schema = editor.schema as unknown;
 
     const remotePresence = new Map<string, any>();
+    const emitPresenceUpdate = () => {
+      (this.options as any).onPresenceUpdate?.(
+        Array.from(remotePresence.entries()).map(([clientId, presence]) => ({
+          clientId,
+          presence,
+        }))
+      );
+    };
 
     const client = new RealtimeClient({
       ...this.options,
@@ -46,56 +55,45 @@ export const RealtimeExtension = Extension.create<RealtimeExtensionOptions>({
       codec: prosemirrorStepCodec,
       onSteps: (msg) => {
         if (!msg.steps?.length) return;
-
         // Skip steps from self to prevent duplication
-        if (msg.clientId === client.getClientId()) {
-          console.log("Skipping steps from self:", msg.clientId);
-          return;
-        }
-
+        if (msg.clientId === client.getClientId()) return;
         try {
           const steps = prosemirrorStepCodec.deserialize(
             editor.schema as any,
             msg.steps
           ) as any[];
-
-          // Validate steps before applying
-          if (!Array.isArray(steps)) {
-            console.warn("Invalid steps received:", msg.steps);
-            return;
-          }
-
-          console.log(
-            "Applying steps from client:",
-            msg.clientId,
-            "steps:",
-            steps.length
-          );
-
           const tr = editor.state.tr;
           for (const step of steps) {
-            if (step && typeof step.apply === "function") {
-              try {
-                tr.step(step);
-              } catch (error) {
-                console.warn("Failed to apply step:", step, error);
-                return; // Skip this message if any step fails
-              }
-            } else {
-              console.warn("Invalid step received:", step);
-              return;
+            try {
+              tr.step(step);
+            } catch (e) {
+              console.warn("Skip invalid step", e);
             }
           }
-
-          if (tr.docChanged) {
-            editor.view.dispatch(tr.setMeta("remote", true));
-          }
-        } catch (error) {
-          console.error("Error processing remote steps:", error);
+          if (tr.steps.length)
+            editor.view.dispatch(
+              tr.setMeta("remote", true).setMeta("addToHistory", false)
+            );
+        } catch (e) {
+          console.error("Error processing remote steps", e);
         }
       },
       onPresence: (msg) => {
         remotePresence.set(msg.clientId, msg.presence);
+        editor.view.dispatch(
+          editor.state.tr.setMeta("realtime-presence", true)
+        );
+        emitPresenceUpdate();
+      },
+      onJoin: (msg) => {
+        // Ensure joining user appears in the list even if they haven't sent presence yet
+        if (!remotePresence.has(msg.clientId)) {
+          remotePresence.set(msg.clientId, { user: { id: msg.clientId } });
+          emitPresenceUpdate();
+        }
+      },
+      onLeave: (msg) => {
+        if (remotePresence.delete(msg.clientId)) emitPresenceUpdate();
         editor.view.dispatch(
           editor.state.tr.setMeta("realtime-presence", true)
         );
@@ -104,6 +102,30 @@ export const RealtimeExtension = Extension.create<RealtimeExtensionOptions>({
         editor.storage.realtimeConnected = isConnected;
         // Propagate to extension consumer if provided
         (this.options as any)?.onConnectionChange?.(isConnected);
+      },
+      onDocSnapshot: (snap) => {
+        try {
+          // Replace entire doc when receiving authoritative snapshot
+          const tr = editor.state.tr.replaceWith(
+            0,
+            editor.state.doc.content.size + 2,
+            (editor as any).schema.nodeFromJSON(snap.doc)
+          );
+          editor.view.dispatch(tr.setMeta("remote", true));
+        } catch (e) {
+          console.warn("Failed to apply doc snapshot", e);
+        }
+      },
+      onError: (err) => {
+        if (err.code === "version_mismatch") {
+          // Request a fresh snapshot from server
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (this.storage.client as any)?.send?.({
+            type: "doc-request",
+            roomId: (this.options as any).roomId,
+            clientId: (this.storage.client as any).getClientId?.(),
+          });
+        }
       },
     });
 
