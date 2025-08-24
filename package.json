@@ -29,6 +29,7 @@
     "prosemirror",
     "websockets"
   ],
+  "sideEffects": false,
   "author": "Olivia Elliott",
   "license": "MIT",
   "dependencies": {

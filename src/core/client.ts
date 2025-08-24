@@ -142,6 +142,18 @@ export class RealtimeClient {
     this.socket?.send(data);
   }
 
+  // Send steps without enqueuing (used during optimistic reapply after snapshot)
+  private sendRawSteps(steps: any[]): void {
+    const payload = {
+      type: "steps",
+      roomId: this.roomId,
+      clientId: this.clientId,
+      version: this.docVersion,
+      steps,
+    } as any;
+    this.send(payload);
+  }
+
   // Dispatch incoming messages to consumer callbacks
   private handleIncoming(raw: string): void {
     let parsed: ServerToClientMessage | undefined;
@@ -173,9 +185,18 @@ export class RealtimeClient {
       case "doc-snapshot":
         this.docVersion = parsed.version;
         this.options.onDocSnapshot?.(parsed);
-        // After replacing doc, we could attempt to rebase queued local steps using Mapping
-        // For now, clear the queue to avoid duplications until rebase is implemented
-        this.pendingLocalSteps = [];
+        // Optimistic re-apply: resend queued local steps against the fresh snapshot version.
+        if (this.pendingLocalSteps.length) {
+          const queued = this.pendingLocalSteps.slice();
+          this.pendingLocalSteps = [];
+          for (const entry of queued) {
+            try {
+              this.sendRawSteps(entry.steps);
+            } catch {
+              // Drop silently on failure
+            }
+          }
+        }
         break;
       case "ping":
         this.options.onPing?.(parsed.ts);
