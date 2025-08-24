@@ -97,6 +97,19 @@ export interface DocRequestMessage extends BaseMessage {
   type: "doc-request";
 }
 
+// Server history for Mapping-based rebase (flattened step sequence)
+export interface HistoryRequestMessage extends BaseMessage {
+  type: "history-request";
+  sinceVersion: number;
+}
+
+export interface HistoryMessage extends BaseMessage {
+  type: "history";
+  fromVersion: number;
+  toVersion: number;
+  steps: PM_StepJSON[];
+}
+
 // Heartbeat ping/pong
 export interface PingMessage extends BaseMessage {
   type: "ping";
@@ -114,6 +127,7 @@ export type ClientToServerMessage =
   | JoinMessage
   | LeaveMessage
   | DocRequestMessage
+  | HistoryRequestMessage
   | PongMessage;
 
 export type ServerToClientMessage =
@@ -122,6 +136,7 @@ export type ServerToClientMessage =
   | PresenceSnapshotMessage
   | DocSnapshotMessage
   | PingMessage
+  | HistoryMessage
   | AckMessage
   | ErrorMessage
   | JoinMessage
@@ -154,6 +169,7 @@ export interface RealtimeClientOptions {
   onAck?: (msg: AckMessage) => void;
   onJoin?: (msg: JoinMessage) => void;
   onLeave?: (msg: LeaveMessage) => void;
+  onHistory?: (msg: HistoryMessage) => void;
 
   // Optional: provide a token to authenticate, returned as string
   getAuthToken?: () => Promise<string> | string;

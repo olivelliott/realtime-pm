@@ -38,6 +38,9 @@ export class RealtimeClient {
   private shouldReconnect = true;
   private docVersion = 0;
   private pendingLocalSteps: { version: number; steps: any[] }[] = [];
+  private historyRequested = false;
+  private lastKnownServerVersion = 0;
+  private rebaseAfterSnapshotPending = false;
 
   constructor(options: RealtimeClientOptions) {
     this.options = options;
@@ -165,8 +168,10 @@ export class RealtimeClient {
 
     switch (parsed?.type) {
       case "steps":
-        if (typeof parsed.version === "number")
+        if (typeof parsed.version === "number") {
           this.docVersion = parsed.version;
+          this.lastKnownServerVersion = parsed.version;
+        }
         this.options.onSteps?.(parsed);
         break;
       case "presence":
@@ -184,17 +189,52 @@ export class RealtimeClient {
         break;
       case "doc-snapshot":
         this.docVersion = parsed.version;
+        this.lastKnownServerVersion = parsed.version;
         this.options.onDocSnapshot?.(parsed);
-        // Optimistic re-apply: resend queued local steps against the fresh snapshot version.
-        if (this.pendingLocalSteps.length) {
-          const queued = this.pendingLocalSteps.slice();
-          this.pendingLocalSteps = [];
-          for (const entry of queued) {
-            try {
-              this.sendRawSteps(entry.steps);
-            } catch {
-              // Drop silently on failure
+        // Request history and mark rebase pending if we have queued local steps.
+        if (!this.historyRequested) {
+          this.historyRequested = true;
+          this.send({ type: "history-request", roomId: (parsed as any).roomId, clientId: this.clientId, sinceVersion: this.lastKnownServerVersion } as any);
+        }
+        this.rebaseAfterSnapshotPending = this.pendingLocalSteps.length > 0;
+        break;
+      case "history":
+        this.historyRequested = false;
+        this.options.onHistory?.(parsed as any);
+        // Compute a Mapping across server steps and rebase queued local steps.
+        if (this.rebaseAfterSnapshotPending) {
+          try {
+            // schema is required to construct Steps
+            const schema: any = (this.options as any).schema;
+            if (!schema) throw new Error('No schema provided for rebase');
+            const { steps: serverStepsJson = [] } = parsed as any;
+            // Build mapping from server steps
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { Step, Mapping } = require('prosemirror-transform');
+            const mapping = new Mapping();
+            for (const json of serverStepsJson) {
+              const st = Step.fromJSON(schema, json);
+              const m = st.getMap();
+              if (m) mapping.appendMap(m);
             }
+            const queued = this.pendingLocalSteps.slice();
+            this.pendingLocalSteps = [];
+            for (const entry of queued) {
+              const transformed: any[] = [];
+              for (const sjson of entry.steps) {
+                const s = Step.fromJSON(schema, sjson);
+                const mapped = s.map(mapping);
+                if (mapped) transformed.push(mapped.toJSON());
+              }
+              if (transformed.length) this.sendRawSteps(transformed);
+            }
+          } catch {
+            // Fallback: if rebase fails, resend queued as-is
+            const queued = this.pendingLocalSteps.slice();
+            this.pendingLocalSteps = [];
+            for (const entry of queued) this.sendRawSteps(entry.steps);
+          } finally {
+            this.rebaseAfterSnapshotPending = false;
           }
         }
         break;

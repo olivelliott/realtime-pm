@@ -23,7 +23,8 @@ import {
 import { PresenceStore } from "./presence";
 import { type WSLike, addSocketListener } from "../utils/websocket";
 import { Schema, Node as PMNode } from "prosemirror-model";
-import { Step } from "prosemirror-transform";
+import { Step, Mapping } from "prosemirror-transform";
+import type { JsonObject } from "./types";
 
 export interface Room {
   id: RoomId;
@@ -34,14 +35,20 @@ export interface Room {
   doc?: PMNode; // authoritative server doc
 }
 
+export interface RoomPersistence {
+  load(roomId: RoomId): Promise<{ version: number; doc: JsonObject; history: any[] } | null>;
+  save(roomId: RoomId, snapshot: { version: number; doc: JsonObject; history: any[] }): Promise<void>;
+}
+
 export class RealtimeServer {
   private readonly rooms = new Map<RoomId, Room>();
   private heartbeatTimer?: any;
   private readonly heartbeatIntervalMs = 5000;
   private readonly presenceTtlMs = 15000;
   private readonly schema: Schema;
+  private readonly persistence?: RoomPersistence;
 
-  constructor(opts?: { schema?: Schema; initialDocJSON?: any }) {
+  constructor(opts?: { schema?: Schema; initialDocJSON?: any; persistence?: RoomPersistence }) {
     this.schema =
       opts?.schema ??
       new Schema({
@@ -59,6 +66,7 @@ export class RealtimeServer {
         },
         marks: {},
       });
+    this.persistence = opts?.persistence;
   }
 
   getOrCreateRoom(roomId: RoomId): Room {
@@ -132,6 +140,9 @@ export class RealtimeServer {
       case "doc-request":
         this.handleDocRequest(msg.roomId, msg.clientId);
         break;
+      case "history-request":
+        this.handleHistoryRequest(msg.roomId, msg.clientId, (msg as any).sinceVersion ?? 0);
+        break;
       case "pong":
         // Update presence timestamp on pong
         this.getOrCreateRoom(msg.roomId).presence.upsert(msg.clientId, {
@@ -144,6 +155,30 @@ export class RealtimeServer {
 
   private handleJoin(socket: WSLike, roomId: RoomId, clientId: ClientId) {
     const room = this.getOrCreateRoom(roomId);
+    // Try to lazy-load from persistence on first join
+    if (this.persistence && room.version === 0 && !room.docJSON) {
+      this.persistence
+        .load(roomId)
+        .then((loaded) => {
+          if (!loaded) return;
+          try {
+            room.version = loaded.version;
+            room.docJSON = loaded.doc;
+            room.doc = this.schema.nodeFromJSON(loaded.doc as any);
+            (room as any).history = loaded.history ?? [];
+            // Send snapshot after load
+            const snap = {
+              type: "doc-snapshot" as const,
+              roomId,
+              clientId,
+              version: room.version,
+              doc: room.docJSON!,
+            };
+            socket.send(JSON.stringify(snap));
+          } catch {}
+        })
+        .catch(() => {});
+    }
     room.clients.set(clientId, socket);
 
     // Broadcast join to others
@@ -224,15 +259,30 @@ export class RealtimeServer {
       }
       const jsonSteps = msg.steps ?? [];
       let doc = room.doc!;
+      const appliedJsonSteps: any[] = [];
       for (const json of jsonSteps) {
         const step = Step.fromJSON(this.schema as any, json as any);
         const result = step.apply(doc);
         if (!result.doc) throw new Error("Step application failed");
         doc = result.doc as PMNode;
+        appliedJsonSteps.push(step.toJSON());
       }
       room.doc = doc;
       room.docJSON = doc.toJSON();
-      room.version += 1;
+      // Each applied step increments the version; version counts steps
+      room.version += appliedJsonSteps.length;
+      // Store applied steps in history for future mapping/rebase
+      (room as any).history = ((room as any).history ?? []).concat(appliedJsonSteps);
+      // Persist snapshot if adapter provided
+      if (this.persistence) {
+        this.persistence
+          .save(msg.roomId, {
+            version: room.version,
+            doc: room.docJSON as any,
+            history: (room as any).history ?? [],
+          })
+          .catch(() => {});
+      }
     } catch (e) {
       const err = {
         type: "error",
@@ -262,6 +312,22 @@ export class RealtimeServer {
       version: room.version,
     } as const;
     this.sendTo(room, msg.clientId, ack);
+  }
+  private handleHistoryRequest(roomId: RoomId, clientId: ClientId, sinceVersion: number) {
+    const room = this.getOrCreateRoom(roomId);
+    const from = Math.max(0, sinceVersion);
+    const to = room.version;
+    const stepsAll = (room as any).history ?? [];
+    const steps = stepsAll.slice(from, to);
+    const payload = {
+      type: "history",
+      roomId,
+      clientId,
+      fromVersion: from,
+      toVersion: to,
+      steps,
+    } as const;
+    this.sendTo(room, clientId, payload);
   }
 
   private handleDocRequest(roomId: RoomId, clientId: ClientId) {
