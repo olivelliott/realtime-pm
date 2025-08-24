@@ -18,6 +18,7 @@ import {
   type ServerToClientMessage,
   type StepsMessage,
   type PresenceMessage,
+  type PresenceSnapshotMessage,
 } from "./types";
 import { PresenceStore } from "./presence";
 import { type WSLike, addSocketListener } from "../utils/websocket";
@@ -103,6 +104,17 @@ export class RealtimeServer {
       },
       clientId
     );
+
+    // Send initial presence snapshot to the joining client
+    const snapshot: PresenceSnapshotMessage = {
+      type: "presence-snapshot",
+      roomId,
+      clientId,
+      presences: room.presence.entries(),
+    };
+    try {
+      socket.send(JSON.stringify(snapshot));
+    } catch {}
   }
 
   private handleLeave(roomId: RoomId, clientId: ClientId) {
@@ -122,7 +134,8 @@ export class RealtimeServer {
       ...msg,
       version: room.version,
     };
-    this.broadcast(room, out);
+    // Avoid echoing back to the sender to prevent duplicate application
+    this.broadcast(room, out, msg.clientId);
   }
 
   private handlePresence(msg: PresenceMessage) {

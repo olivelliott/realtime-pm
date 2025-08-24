@@ -57,6 +57,11 @@ export interface PresenceMessage extends BaseMessage {
   presence: UserPresence;
 }
 
+export interface PresenceSnapshotMessage extends BaseMessage {
+  type: "presence-snapshot";
+  presences: Array<{ clientId: ClientId; presence: UserPresence }>;
+}
+
 export interface JoinMessage extends BaseMessage {
   type: "join";
   presence?: UserPresence;
@@ -89,6 +94,7 @@ export type ClientToServerMessage =
 export type ServerToClientMessage =
   | StepsMessage
   | PresenceMessage
+  | PresenceSnapshotMessage
   | AckMessage
   | ErrorMessage
   | JoinMessage

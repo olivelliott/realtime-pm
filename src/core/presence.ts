@@ -28,4 +28,8 @@ export class PresenceStore {
   all(): UserPresence[] {
     return Array.from(this.clientIdToPresence.values());
   }
+
+  entries(): Array<{ clientId: ClientId; presence: UserPresence }> {
+    return Array.from(this.clientIdToPresence.entries()).map(([clientId, presence]) => ({ clientId, presence }));
+  }
 }

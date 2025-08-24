@@ -33,6 +33,10 @@ export class RealtimeClient {
   private readonly roomId: RoomId;
   private readonly clientId: ClientId;
   private readonly options: RealtimeClientOptions;
+  private reconnectAttempts = 0;
+  private reconnectTimer?: any;
+  private shouldReconnect = true;
+  private docVersion = 0;
 
   constructor(options: RealtimeClientOptions) {
     this.options = options;
@@ -74,15 +78,17 @@ export class RealtimeClient {
 
     addSocketListener(socket, "close", () => {
       this.options.onConnectionChange?.(false);
+      if (this.shouldReconnect) this.scheduleReconnect();
     });
 
     addSocketListener(socket, "error", (error: any) => {
-      //TODO: consider reconnection/backoff | handle errors properly
       console.error("WebSocket error", error);
+      if (this.shouldReconnect) this.scheduleReconnect();
     });
   }
 
   disconnect(): void {
+    this.shouldReconnect = false;
     if (!this.socket) return;
     try {
       this.send({
@@ -102,6 +108,7 @@ export class RealtimeClient {
       type: "steps",
       roomId: this.roomId,
       clientId: this.clientId,
+      version: this.docVersion,
       ...msg,
     });
   }
@@ -116,6 +123,11 @@ export class RealtimeClient {
       clientId: this.clientId,
       ...msg,
     });
+  }
+
+  // Getter for client ID
+  getClientId(): ClientId {
+    return this.clientId;
   }
 
   private send(message: ClientToServerMessage): void {
@@ -134,6 +146,8 @@ export class RealtimeClient {
 
     switch (parsed?.type) {
       case "steps":
+        if (typeof parsed.version === "number")
+          this.docVersion = parsed.version;
         this.options.onSteps?.(parsed);
         break;
       case "presence":
@@ -146,6 +160,19 @@ export class RealtimeClient {
       default:
         break;
     }
+  }
+
+  private scheduleReconnect() {
+    const base = 300; // ms
+    const max = 8000;
+    const attempt = Math.min(this.reconnectAttempts++, 6);
+    const delay =
+      Math.min(max, base * Math.pow(2, attempt)) +
+      Math.floor(Math.random() * 200);
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => {
+      this.connect().catch(() => {});
+    }, delay);
   }
 }
 
