@@ -39,3 +39,83 @@ export interface UserPresence {
   meta?: JsonObject;
   timestamp?: number; // server or client generated
 }
+
+export interface BaseMessage {
+  roomId: RoomId;
+  clientId: ClientId;
+}
+
+export interface StepsMessage extends BaseMessage {
+  type: "steps";
+  version?: number; // optional doc version for conflict detection
+  steps: PM_StepJSON[];
+  clientSelection?: CursorRange; // optional selection snapshot
+}
+
+export interface PresenceMessage extends BaseMessage {
+  type: "presence";
+  presence: UserPresence;
+}
+
+export interface JoinMessage extends BaseMessage {
+  type: "join";
+  presence?: UserPresence;
+}
+
+export interface LeaveMessage extends BaseMessage {
+  type: "leave";
+}
+
+export interface AckMessage extends BaseMessage {
+  type: "ack";
+  ackType: "steps" | "presence" | "join" | "leave";
+  ok: boolean;
+  reason?: string;
+  version?: number;
+}
+
+export interface ErrorMessage extends BaseMessage {
+  type: "error";
+  code: string;
+  reason: string;
+}
+
+export type ClientToServerMessage =
+  | StepsMessage
+  | PresenceMessage
+  | JoinMessage
+  | LeaveMessage;
+
+export type ServerToClientMessage =
+  | StepsMessage
+  | PresenceMessage
+  | AckMessage
+  | ErrorMessage
+  | JoinMessage
+  | LeaveMessage;
+
+// Codec to serialize/deserialize steps. Implementations live in utils/stepHelpers.ts
+export interface StepCodec {
+  serialize(steps: unknown[]): PM_StepJSON[];
+  deserialize(schema: unknown, steps: PM_StepJSON[]): unknown[];
+}
+
+// Client options to configure networking and callbacks
+export interface RealtimeClientOptions {
+  url: string; // ws(s):// endpoint
+  roomId: RoomId;
+  clientId?: ClientId; // if omitted, a random one will be generated
+  presence?: UserPresence; // optional initial presence
+  schema?: unknown; // pass a ProseMirror schema if you want client-side decode
+  codec?: StepCodec; // step serializer/decoder
+  // Optional factory to construct a WebSocket-like object (useful in Node).
+  socketFactory?: (url: string) => unknown;
+
+  // Callbacks
+  onSteps?: (msg: StepsMessage) => void;
+  onPresence?: (msg: PresenceMessage) => void;
+  onConnectionChange?: (isConnected: boolean) => void;
+
+  // Optional: provide a token to authenticate, returned as string
+  getAuthToken?: () => Promise<string> | string;
+}
